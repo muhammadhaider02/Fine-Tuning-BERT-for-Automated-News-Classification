@@ -330,8 +330,8 @@ Sci/Tech            33       5       111      1751
 
 ### 10.1 AG News vs Reuters
 
-| Aspect | AG News | Reuters-10 | Reuters-50 |
-|--------|---------|------------|------------|
+| Aspect | AG News | Reuters | Reuters |
+|--------|---------|---------|---------|
 | **Classes** | 4 | 46 | 18 |
 | **Train samples** | 120,000 | 8,982 | 8,227 |
 | **Test samples** | 7,600 | 2,246 | 2,042 |

@@ -153,13 +153,13 @@ dataset = DatasetDict(
 print(dataset)
 
 # =========================================================
-# 4. Tokenizer and tokenization (BERT-base)
+# 4. Tokenizer and tokenization (Small BERT-compatible)
 # =========================================================
-# BERT-base (12-layer, H=768, A=12) - matches original paper
-model_name = "bert-base-uncased"
+# Small BERT (4-layer, H=512, A=8)
+model_name = "google/bert_uncased_L-4_H-512_A-8"
 
-print(f"\nLoading tokenizer: {model_name}")
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+print(f"\nLoading tokenizer: bert-base-uncased (vocab compatible with Small BERT)")
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
 MAX_LEN = 300  # as per plan (reduce to 256 only if OOM)
 
@@ -193,8 +193,7 @@ for lbl, cnt in counter.items():
 
 # Inverse-frequency weighting
 class_weights = 1.0 / np.maximum(class_counts, 1.0)
-class_weights = np.clip(class_weights, 0, 10)  # Cap extreme weights for stability
-class_weights = class_weights * (num_classes / class_weights.sum())  # normalize
+class_weights = class_weights * (num_classes / class_weights.sum())  # normalize a bit
 class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 print("Class weights:", class_weights_tensor)
 
@@ -219,13 +218,13 @@ class ModelOutput:
             raise IndexError(f"Index {idx} out of range")
 
 # =========================================================
-# 7. Custom BERT-base classifier head (768 -> 256 -> Dropout -> 46)
+# 7. Custom Small BERT classifier head (512 -> 256 -> Dropout -> 46)
 # =========================================================
-class BertBaseReutersClassifier(nn.Module):
+class SmallBertReutersClassifier(nn.Module):
     def __init__(self, base_model_name: str, num_labels: int, dropout_prob: float = 0.3, intermediate_dim: int = 256):
         super().__init__()
         self.bert = AutoModel.from_pretrained(base_model_name, use_safetensors=True)
-        hidden_size = self.bert.config.hidden_size  # 768 for BERT-base
+        hidden_size = self.bert.config.hidden_size  # 512 for Small BERT
 
         self.dropout = nn.Dropout(dropout_prob)
         self.intermediate = nn.Linear(hidden_size, intermediate_dim)
@@ -441,7 +440,7 @@ def train_one_run(
         disable_tqdm=False,
     )
 
-    model = BertBaseReutersClassifier(
+    model = SmallBertReutersClassifier(
         base_model_name=model_name,
         num_labels=num_classes,
         dropout_prob=0.3,
@@ -450,7 +449,7 @@ def train_one_run(
 
     trainer = WeightedFocalTrainer(
         class_weights=class_weights_tensor,
-        gamma=1.0,
+        gamma=2.0,
         label_smoothing=0.1,
         model=model,
         args=training_args,
@@ -465,7 +464,7 @@ def train_one_run(
         trainer=trainer,
         eval_dataset=val_dataset,
         best_model_dir=best_model_dir,
-        patience=7,  # FIXED: Increased from 5 to 7 for longer training
+        patience=5,
         min_delta=1e-4,
     )
     trainer.add_callback(callback)
@@ -492,7 +491,7 @@ indices = np.arange(N_train)
 
 train_idx_lr, val_idx_lr = train_test_split(
     indices,
-    test_size=0.2,  # FIXED: Increased from 0.1 to 0.2 for more stable LR selection
+    test_size=0.1,
     random_state=42,
     stratify=train_labels,
 )
@@ -503,7 +502,7 @@ val_idx_lr = val_idx_lr.tolist()
 tokenized_train_lr = tokenized_dataset["train"].select(train_idx_lr)
 tokenized_val_lr = tokenized_dataset["train"].select(val_idx_lr)
 
-lr_candidates = [2e-5, 3e-5]  # FIXED: Removed extremes (1e-5 too slow, 5e-5 too high)
+lr_candidates = [1e-5, 2e-5, 3e-5, 5e-5]
 lr_results = {}
 
 base_output_dir = "reuters-small-bert-max"
@@ -521,7 +520,7 @@ for lr in lr_candidates:
         output_dir=output_dir,
         run_name=run_name,
         class_weights_tensor=class_weights_tensor,
-        num_epochs=20,  # FIXED: Increased from 10 to 20 (models were still improving)
+        num_epochs=10,
         warmup_ratio=0.15,
     )
 
@@ -569,7 +568,7 @@ for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, labels_array)
         output_dir=fold_output_dir,
         run_name=fold_run_name,
         class_weights_tensor=class_weights_tensor,
-        num_epochs=20,  # FIXED: Increased from 10 to 20 (models were still improving)
+        num_epochs=10,
         warmup_ratio=0.15,
     )
 
@@ -577,7 +576,7 @@ for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, labels_array)
     print(f"Reloading best model for fold {fold_idx} to evaluate on its validation set...")
     # Load the saved model using HuggingFace's save/load mechanism
     # The Trainer saves the entire model, so we need to load just the BERT part and rebuild our classifier
-    fold_model = BertBaseReutersClassifier(
+    fold_model = SmallBertReutersClassifier(
         base_model_name=model_name,
         num_labels=num_classes,
         dropout_prob=0.3,
@@ -594,7 +593,7 @@ for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, labels_array)
     # Build a temporary trainer just for evaluation
     eval_trainer = WeightedFocalTrainer(
         class_weights=class_weights_tensor,
-        gamma=1.0,  # FIXED: Reduced from 2.0 for stability
+        gamma=2.0,
         label_smoothing=0.1,
         model=fold_model,
         args=TrainingArguments(
@@ -630,7 +629,7 @@ ensemble_models = []
 for i, best_dir in enumerate(fold_best_dirs, start=1):
     checkpoint_path = os.path.join(best_dir, "model.safetensors")
     print(f"Loading fold {i} model from {checkpoint_path}")
-    m = BertBaseReutersClassifier(
+    m = SmallBertReutersClassifier(
         base_model_name=model_name,
         num_labels=num_classes,
         dropout_prob=0.3,

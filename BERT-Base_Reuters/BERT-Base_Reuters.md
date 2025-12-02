@@ -1,6 +1,6 @@
 # Fine-Tuning BERT-Base for Reuters News Classification - Implementation Report
 
-This document describes the implementation of BERT-base fine-tuning on a **filtered Reuters-21578 dataset** (classes with ≥50 samples) using advanced training techniques including focal loss, class weighting, label smoothing, gradient checkpointing, and 3-fold cross-validation ensemble.
+This document describes the implementation of BERT-base fine-tuning on the Reuters-21578 dataset with advanced training techniques including focal loss, class weighting, label smoothing, and 3-fold cross-validation ensemble.
 
 ---
 
@@ -8,78 +8,62 @@ This document describes the implementation of BERT-base fine-tuning on a **filte
 
 - **Task**: Automatic **news topic classification** for English news articles.
 - **Domain**: General news articles from the **Reuters-21578** collection.
-- **Objective**: Fine-tune **BERT-base-uncased** on a **filtered dataset** (removing ultra-rare classes) to achieve:
-  - Better model stability by focusing on classes with sufficient training data.
-  - Improved performance through aggressive text cleaning and preprocessing.
-  - Robust evaluation via 3-fold stratified cross-validation with ensemble prediction.
-  - Memory-efficient training using gradient checkpointing.
+- **Objective**: Fine-tune **BERT-base-uncased** with advanced training techniques to achieve robust classification performance through:
+  - Class-weighted focal loss to handle class imbalance.
+  - Label smoothing for better generalization.
+  - 3-fold stratified cross-validation with ensemble prediction.
+  - Learning rate search for optimal hyperparameters.
 
 ---
 
 ## 2. Dataset and Preprocessing
 
-### 2.1 Reuters-21578 Dataset (Filtered)
+### 2.1 Reuters-21578 Dataset
 
-**Original dataset**:
-- Total samples: **11,228** news articles
-- Training samples: **8,982**
-- Test samples: **2,246**
-- Categories: **46** topic classes
+- **Corpus**: **11,228** news articles total.
+  - Training samples: **8,982**
+  - Test samples: **2,246**
+- **Categories**: **46** topic classes.
+- **Split**: 80% training / 20% testing (using Keras default split with seed=113).
 
-**Filtering strategy**:
-- **Removed classes with < 50 samples** to improve training stability
-- **Classes kept**: **18** (down from 46)
-- **Final dataset**:
-  - Training samples: **8,227** (755 samples removed)
-  - Test samples: **2,042** (204 samples removed)
+### 2.2 Vocabulary and Sequence Length
 
-**Rationale**: Ultra-rare classes (< 50 samples) cause:
-- Extreme class imbalance
-- Unstable training
-- Poor generalization
-- Unreliable metrics
+- **Vocabulary**: Truncated to the top **10,000 most frequent words**.
+- **Sequence length**: **300 tokens** (padded or truncated).
+- **Special tokens**:
+  - `[PAD]` (index 0)
+  - `[START]` (index 1)
+  - `[UNK]` (index 2) for out-of-vocabulary words
+  - `[UNUSED]` (index 3)
 
-### 2.2 Text Cleaning and Preprocessing
+### 2.3 Text Decoding and Tokenization
 
-**Aggressive cleaning pipeline**:
-1. **Remove special tokens**: `[START]`, `[UNK]`, `[PAD]`, `[UNUSED]`
-2. **Lowercase conversion**
-3. **Remove stopwords**: Using NLTK English stopwords
-4. **Remove punctuation and numbers**
-5. **Remove extra whitespace**
-6. **Minimum length filter**: Keep only non-empty texts
+1. **Text decoding**:
+   - Original Reuters data provides sequences of word indices.
+   - Word-index mapping downloaded from TensorFlow datasets.
+   - Sequences decoded to raw text using reverse word index.
 
-**Example**:
-- **Before**: `[START] [UNK] [UNK] said as a result of its december acquisition...`
-- **After**: `said as a result of its december acquisition of space co it expects earnings...`
+2. **BERT tokenization**:
+   - **Tokenizer**: `bert-base-uncased` WordPiece tokenizer.
+   - **Max length**: 300 tokens.
+   - **Padding**: `max_length` strategy.
+   - **Truncation**: Enabled.
 
-### 2.3 Sequence Length and Tokenization
+3. **BERT inputs**:
+   - `input_ids`: Token IDs from BERT vocabulary.
+   - `attention_mask`: Binary mask (1 for real tokens, 0 for padding).
+   - `token_type_ids`: All zeros (single-sentence classification).
 
-- **Vocabulary**: BERT-base WordPiece (30,522 tokens)
-- **Sequence length**: **300 tokens** (padded or truncated)
-- **Tokenizer**: `bert-base-uncased`
-- **Padding**: `max_length` strategy
-- **Truncation**: Enabled
+### 2.4 Class Imbalance Handling
 
-### 2.4 Class Distribution and Weights
+**Class weights** computed using inverse-frequency weighting:
+- Formula: `weight[c] = 1 / max(count[c], 1)`
+- Weights clipped to range [0, 10] for stability.
+- Normalized so sum equals number of classes.
 
-**Final class counts** (18 classes):
+Example weights (tensor):
 ```
-Class 0:   55 samples  | Class 9:  172 samples
-Class 1:  432 samples  | Class 10: 444 samples
-Class 2:   74 samples  | Class 11:  66 samples
-Class 3: 3159 samples  | Class 12: 549 samples
-Class 4: 1949 samples  | Class 13: 269 samples
-Class 5:  139 samples  | Class 14: 100 samples
-Class 6:  101 samples  | Class 15:  62 samples
-Class 7:  124 samples  | Class 16:  92 samples
-Class 8:  390 samples  | Class 17:  50 samples
-```
-
-**Class weights** (inverse-frequency, clipped & normalized):
-```
-[2.21, 0.28, 1.64, 0.04, 0.06, 0.87, 1.20, 0.98, 0.31, 0.71, 
- 0.27, 1.84, 0.22, 0.45, 1.21, 1.96, 1.32, 2.43]
+[0.5730, 0.0729, 0.4258, 0.0100, 0.0162, 1.8537, 0.6565, 1.9695, ...]
 ```
 
 ---
@@ -89,22 +73,38 @@ Class 8:  390 samples  | Class 17:  50 samples
 ### 3.1 BERT Encoder
 
 **Model**: `bert-base-uncased` (12-layer, 768-hidden, 12-heads)
-- **Transformer layers**: 12 encoder blocks
-- **Hidden size**: 768
-- **Attention heads**: 12 per layer
-- **Parameters**: ~110M
-- **Gradient checkpointing**: **Enabled** (saves GPU memory)
+- **Transformer layers**: 12 encoder blocks.
+- **Hidden size**: 768.
+- **Attention heads**: 12 per layer.
+- **Parameters**: ~110M.
 
-### 3.2 Classification Head
+Each transformer layer contains:
+- **Multi-Head Self-Attention (MHSA)**: Bidirectional context modeling.
+- **Feed-Forward Network (FFN)**: Two-layer MLP with GELU activation.
+- **Residual connections** and **layer normalization**.
 
-**Native HuggingFace head** (`AutoModelForSequenceClassification`):
-- **Architecture**: `[CLS] → Dense(18, softmax)`
-- **Dropout**: 
-  - `hidden_dropout_prob`: **0.3**
-  - `attention_probs_dropout_prob`: **0.1**
-- **Output**: 18 neurons (one per class)
+The **pooled output of the [CLS] token** is used as the document representation.
 
-**Key difference from Reuters-10**: Uses HuggingFace's built-in classification head instead of custom layers.
+### 3.2 Custom Classification Head
+
+Architecture: `[CLS] → Dropout → Dense(256) → ReLU → Dropout → Dense(46)`
+
+1. **First dropout layer**:
+   - Dropout rate: **0.3**.
+   - Applied to [CLS] pooled output (768-dim).
+
+2. **Intermediate dense layer**:
+   - Size: **256 neurons**.
+   - Activation: **ReLU**.
+   - Purpose: Learn task-specific features.
+
+3. **Second dropout layer**:
+   - Dropout rate: **0.3**.
+   - Regularization before final classification.
+
+4. **Output layer**:
+   - Size: **46 neurons** (one per class).
+   - Activation: **Softmax** (applied in loss function).
 
 ---
 
@@ -112,76 +112,91 @@ Class 8:  390 samples  | Class 17:  50 samples
 
 ### 4.1 Loss Function
 
-**Focal Loss** with class weights and label smoothing:
+**Weighted Focal Loss** with label smoothing:
 
-- **Focal parameter (γ)**: **0.5** (reduced from 2.0 for stability)
-- **Class weights**: Applied per-class (α weights)
-- **Label smoothing**: **0.05** (5% smoothing)
+- **Base**: Multi-class focal loss.
+- **Focal parameter (γ)**: 1.0 (reduced from 2.0 for stability).
+- **Class weights**: Applied per-class (α weights).
+- **Label smoothing**: 0.1 (10% smoothing).
 
 Formula:
 ```
 FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
 ```
 
-Label smoothing:
+Where:
+- `p_t` is the probability of the true class.
+- `α_t` is the class weight.
+- `γ` controls focus on hard examples.
+
+Label smoothing creates soft targets:
 ```
 y_smooth = (1 - ε) * y_true + ε / num_classes
 ```
 
 ### 4.2 Optimizer and Scheduler
 
-- **Optimizer**: **AdamW** (Adam with weight decay)
-- **Weight decay**: **0.01**
-- **Learning rate**: **3e-5** (fixed, no search)
-- **LR scheduler**: **Cosine** with warmup
-- **Warmup ratio**: **0.15** (15% of total steps)
+- **Optimizer**: **AdamW** (Adam with weight decay).
+- **Weight decay**: 0.01.
+- **Learning rate**: **3e-5** (selected via LR search).
+- **LR scheduler**: **Cosine** with warmup.
+- **Warmup ratio**: 0.15 (15% of total steps).
+- **Gradient clipping**: Max norm 1.0.
 
 ### 4.3 Training Hyperparameters
 
-- **Batch size**: 8 per device
-- **Gradient accumulation steps**: 4 (effective batch size = **32**)
-- **Epochs**: 20 (with early stopping)
-- **Early stopping patience**: **7 epochs**
-- **Early stopping metric**: Validation F1-score
-- **Min delta**: **1e-4**
-- **Mixed precision**: **FP16** enabled
-- **Gradient checkpointing**: **Enabled** (memory optimization)
+- **Batch size**: 16 per device.
+- **Gradient accumulation steps**: 2 (effective batch size = 32).
+- **Epochs**: 20 (with early stopping).
+- **Early stopping patience**: 7 epochs.
+- **Early stopping metric**: Validation F1-score.
+- **Min delta**: 1e-4.
+- **Mixed precision**: FP16 enabled.
 
 ### 4.4 Hardware
 
-- **Device**: CUDA GPU (Google Colab T4)
-- **GPU**: NVIDIA Tesla T4
+- **Device**: CUDA GPU (forced, no CPU fallback).
+- **GPU**: NVIDIA GPU with CUDA support.
 
 ---
 
 ## 5. Training Strategy
 
-### 5.1 3-Fold Stratified Cross-Validation
+### 5.1 Phase 6: Learning Rate Search
 
-**Objective**: Train robust ensemble without separate LR search.
+**Objective**: Find optimal learning rate.
 
 **Setup**:
-- **Folds**: 3 stratified folds
-- **Learning rate**: **3e-5** (fixed)
-- **Epochs**: 20 per fold (with early stopping)
-- **Validation**: Each fold uses different 1/3 of data
-- **Checkpoint management**: Auto-resume from last checkpoint
-- **Save strategy**: Save every epoch, keep last 5 checkpoints
+- Single stratified split: 80% train / 20% validation.
+- Candidates tested: **2e-5**, **3e-5**.
+- Epochs: 20 per candidate.
+
+**Results**:
+| Learning Rate | Best Val F1 | Best Epoch |
+|--------------|-------------|------------|
+| 2e-5         | 0.8617      | 16         |
+| **3e-5**     | **0.8656**  | **10**     |
+
+**Selected**: **3e-5** (best validation F1).
+
+### 5.2 Phase 7: 3-Fold Stratified Cross-Validation
+
+**Objective**: Train robust ensemble of models.
+
+**Setup**:
+- **Folds**: 3 stratified folds.
+- **Learning rate**: 3e-5 (from LR search).
+- **Epochs**: 20 per fold (with early stopping).
+- **Validation**: Each fold uses different 1/3 of data.
 
 **Fold Results**:
-
 | Fold | Best Epoch | Val F1  | Val Accuracy |
 |------|-----------|---------|--------------|
-| 1    | 11        | 0.8867  | 0.8881       |
-| 2    | 9         | 0.8914  | 0.8891       |
-| 3    | 11        | 0.8812  | 0.8797       |
+| 1    | 18        | 0.8548  | 0.8400       |
+| 2    | 18        | 0.8584  | 0.8504       |
+| 3    | 13        | 0.8550  | 0.8457       |
 
-**Average CV F1**: **0.8864**
-
-**Key observations**:
-- All folds converged to similar performance (~88% F1)
-- Early stopping triggered between epochs 9-11
-- Consistent validation accuracy across folds
+**Average CV F1**: 0.8561
 
 ---
 
@@ -198,41 +213,33 @@ y_smooth = (1 - ε) * y_true + ε / num_classes
 
 **Method**: Average logits from 3 fold models, then argmax.
 
-**Test Set Results** (held-out 2,042 samples):
+**Test Set Results** (held-out 2,246 samples):
 
 | Metric    | Score  |
 |-----------|--------|
-| Accuracy  | 87.56% |
-| Precision | 0.8817 |
-| Recall    | 0.8756 |
-| **F1-score** | **0.8773** |
+| Accuracy  | 83.70% |
+| Precision | 0.8708 |
+| Recall    | 0.8370 |
+| **F1-score** | **0.8497** |
 
 ### 6.3 Per-Class Performance
 
 **High-performing classes** (F1 > 0.90):
-- Class 3: F1 = 0.9458 (812 samples) - largest class
-- Class 16: F1 = 0.9524 (31 samples)
-- Class 7: F1 = 0.9032 (30 samples)
-- Class 4: F1 = 0.8998 (474 samples)
-- Class 6: F1 = 0.8846 (25 samples)
+- Class 3: F1 = 0.9222 (813 samples) - largest class
+- Class 4: F1 = 0.9003 (474 samples)
+- Class 10: F1 = 0.9333 (30 samples)
+- Class 6: F1 = 0.9032 (14 samples)
+- Class 32: F1 = 0.9474 (10 samples)
 
-**Moderate-performing classes** (0.70 < F1 < 0.90):
-- Class 1: F1 = 0.8505 (105 samples)
-- Class 0: F1 = 0.8696 (12 samples)
-- Class 8: F1 = 0.8144 (83 samples)
-- Class 10: F1 = 0.7943 (99 samples)
-- Class 14: F1 = 0.7812 (27 samples)
-- Class 5: F1 = 0.7273 (38 samples)
-- Class 15: F1 = 0.7143 (19 samples)
-- Class 2: F1 = 0.7000 (20 samples)
+**Low-performing classes** (F1 < 0.50):
+- Class 5: F1 = 0.0000 (5 samples) - extremely rare
+- Class 35: F1 = 0.0952 (6 samples)
+- Class 40: F1 = 0.3529 (10 samples)
+- Class 27: F1 = 0.3636 (4 samples)
+- Class 33: F1 = 0.4000 (5 samples)
 
-**Lower-performing classes** (F1 < 0.70):
-- Class 11: F1 = 0.6842 (20 samples)
-- Class 13: F1 = 0.6115 (70 samples)
-- Class 9: F1 = 0.7532 (37 samples)
-
-**Macro average**: Precision 0.8032, Recall 0.8177, F1 0.8064
-**Weighted average**: Precision 0.8817, Recall 0.8756, F1 0.8773
+**Macro average**: Precision 0.6716, Recall 0.8027, F1 0.7074
+**Weighted average**: Precision 0.8708, Recall 0.8370, F1 0.8497
 
 ---
 
@@ -240,27 +247,25 @@ y_smooth = (1 - ε) * y_true + ε / num_classes
 
 ### 7.1 Main Error Sources
 
-1. **Remaining class imbalance**:
-   - Despite filtering, Class 3 (3,159 samples) dominates
-   - Smallest classes (50-70 samples) still show lower F1
-   - Class 13 (70 samples): 61.15% F1
+1. **Extreme class imbalance**:
+   - Classes with < 10 samples show very poor performance.
+   - Class 5 (5 samples): 0% precision/recall.
+   - Class 35 (6 samples): 5.26% precision.
+   - Even with class weights, insufficient data for rare classes.
 
 2. **Confusion between similar topics**:
-   - Financial and economic news categories overlap
-   - Political and business topics confused
+   - Financial news categories often confused.
+   - Political and economic topics overlap.
 
 3. **Sequence truncation**:
-   - 300-token limit may cut important context
-   - Longer articles lose tail information
+   - 300-token limit may cut important context.
+   - Longer articles lose tail information.
 
 ### 7.2 Confusion Matrix Insights
 
-- **Shape**: 18 × 18
-- **Diagonal dominance**: Strong for major classes (3, 4, 1, 12)
-- **Off-diagonal errors**: 
-  - Class 3 ↔ Class 4: Frequent confusion (both large classes)
-  - Class 1 → Class 3: 7 misclassifications
-  - Class 13 shows scattered errors across multiple classes
+- **Shape**: 46 × 46
+- **Diagonal dominance**: Most predictions correct for major classes.
+- **Off-diagonal errors**: Concentrated in rare classes and semantically similar categories.
 
 ---
 
@@ -268,24 +273,23 @@ y_smooth = (1 - ε) * y_true + ε / num_classes
 
 ### 8.1 Training Duration
 
-**Cross-Validation** (estimated from progress bars):
-- Fold 1: ~46 minutes (18 epochs, early stopped)
-- Fold 2: ~43 minutes (16 epochs, early stopped)
-- Fold 3: ~48 minutes (18 epochs, early stopped)
+**Learning Rate Search**:
+- 2e-5: 124.6 minutes (20 epochs)
+- 3e-5: 122.1 minutes (17 epochs, early stopped)
 
-**Total training time**: ~137 minutes (~2.3 hours)
+**Cross-Validation**:
+- Fold 1: 90.0 minutes (20 epochs)
+- Fold 2: 172.3 minutes (20 epochs)
+- Fold 3: 108.3 minutes (20 epochs, early stopped)
 
-**Note**: Significantly faster than Reuters-10 (~10.3 hours) due to:
-- Smaller dataset (8,227 vs 8,982 samples)
-- Gradient checkpointing (memory-efficient)
-- Native HuggingFace head (optimized)
+**Total training time**: ~617 minutes (~10.3 hours)
 
 ### 8.2 Training Efficiency
 
-- **Iterations per second**: ~1.18-1.22 it/s
-- **Mixed precision**: FP16 enabled
-- **Gradient checkpointing**: Enabled (trades compute for memory)
-- **Checkpoint management**: Auto-resume capability
+- **Samples per second**: ~11-22 (varies by fold)
+- **Steps per second**: ~0.36-0.70
+- **Mixed precision**: FP16 enabled for faster training
+- **Gradient checkpointing**: Not used (sufficient GPU memory)
 
 ---
 
@@ -293,76 +297,62 @@ y_smooth = (1 - ε) * y_true + ε / num_classes
 
 ### 9.1 Custom Trainer
 
-**FocalTrainer** extends HuggingFace `Trainer`:
-- Implements focal loss with class weights
-- Applies label smoothing
-- Caches class weights on device
-- Compatible with HuggingFace's training loop
+**WeightedFocalTrainer** extends HuggingFace `Trainer`:
+- Implements focal loss with class weights.
+- Applies label smoothing.
+- Caches class weights on device.
 
 ### 9.2 Callbacks
 
-**EarlyStopCallback**:
-- Evaluates on validation set after each epoch
-- Prints table with metrics (Loss, Accuracy, Precision, Recall, F1)
-- Saves best model based on validation F1
-- Implements early stopping with patience
-- Uses PyTorch `.pt` format for checkpoints
+**EpochMetricsAndEarlyStoppingCallback**:
+- Evaluates on validation set after each epoch.
+- Prints epoch metrics (loss, accuracy, F1, time).
+- Saves best model based on validation F1.
+- Implements early stopping with patience.
+- Tracks total training time.
 
 ### 9.3 Model Saving and Loading
 
-- **Format**: PyTorch state dict (`.pt`)
-- **Best model**: Saved per fold in `best_model.pt`
-- **Loading**: Direct state dict loading for ensemble
-- **Checkpoint strategy**: Save every epoch, keep last 5
+- **Format**: SafeTensors (`.safetensors`)
+- **Best model**: Saved per fold in `best/` subdirectory
+- **Loading**: Custom state dict loading for ensemble
 
 ---
 
-## 10. Comparison with Reuters-10 Implementation
+## 10. Comparison with Original Paper
 
-### 10.1 Dataset Differences
+### 10.1 Architecture Differences
 
-| Aspect | Reuters-10 | Reuters-50 |
-|--------|-----------|-----------|
-| Classes | 46 | 18 (filtered) |
-| Train samples | 8,982 | 8,227 |
-| Test samples | 2,246 | 2,042 |
-| Text cleaning | Minimal | Aggressive |
-| Stopword removal | No | Yes |
+| Aspect | Original Paper | This Implementation |
+|--------|---------------|---------------------|
+| BERT variant | Small BERT (L-4, H-512, A-8) | BERT-base (L-12, H-768, A-12) |
+| Intermediate layer | 256 neurons | 256 neurons |
+| Dropout | 0.3 | 0.3 (applied twice) |
+| Activation | ReLU | ReLU |
 
-### 10.2 Architecture Differences
+### 10.2 Training Differences
 
-| Aspect | Reuters-10 | Reuters-50 |
-|--------|-----------|-----------|
-| BERT variant | BERT-base | BERT-base |
-| Classification head | Custom (768→256→46) | Native HF (768→18) |
-| Dropout layers | 2 layers (0.3 each) | Built-in (0.3 hidden, 0.1 attention) |
-| Gradient checkpointing | No | Yes |
+| Aspect | Original Paper | This Implementation |
+|--------|---------------|---------------------|
+| Loss | Sparse categorical cross-entropy | Weighted focal loss + label smoothing |
+| Optimizer | AdamW | AdamW |
+| Epochs | 10 | 20 (with early stopping) |
+| Batch size | 32 | 32 (effective, via accumulation) |
+| Validation | Single split | 3-fold cross-validation |
+| Ensemble | No | Yes (3 models) |
 
-### 10.3 Training Differences
+### 10.3 Performance Comparison
 
-| Aspect | Reuters-10 | Reuters-50 |
-|--------|-----------|-----------|
-| Loss | Weighted focal (γ=1.0) | Weighted focal (γ=0.5) |
-| Label smoothing | 0.1 | 0.05 |
-| Batch size | 16 (accum 2 = 32) | 8 (accum 4 = 32) |
-| LR search | Yes (2e-5, 3e-5) | No (fixed 3e-5) |
-| Epochs | 20 | 20 |
-| Patience | 7 | 7 |
+| Model | Accuracy | Precision | Recall | F1-score |
+|-------|----------|-----------|--------|----------|
+| Original Paper (Small BERT) | 91.77% | 0.92 | 0.91 | 0.915 |
+| This Implementation (BERT-base ensemble) | 83.70% | 0.8708 | 0.8370 | 0.8497 |
 
-### 10.4 Performance Comparison
-
-| Model | Classes | Accuracy | Precision | Recall | F1-score |
-|-------|---------|----------|-----------|--------|----------|
-| Reuters-10 | 46 | 83.70% | 0.8708 | 0.8370 | 0.8497 |
-| **Reuters-50** | **18** | **87.56%** | **0.8817** | **0.8756** | **0.8773** |
-
-**Performance improvement**: +3.86% accuracy, +2.76% F1
-
-**Reasons for better performance**:
-1. **Filtered dataset**: Removed ultra-rare classes (< 50 samples)
-2. **Aggressive text cleaning**: Better signal-to-noise ratio
-3. **Reduced complexity**: 18 classes vs 46 classes
-4. **Lower focal gamma**: 0.5 vs 1.0 (less aggressive focusing)
+**Note**: Lower performance likely due to:
+- Different BERT variant (base vs. small).
+- More aggressive regularization (focal loss, label smoothing).
+- Different random seeds and data splits.
+- Ensemble averaging may smooth predictions.
 
 ---
 
@@ -370,94 +360,84 @@ y_smooth = (1 - ε) * y_true + ε / num_classes
 
 ### 11.1 Strengths
 
-1. **Cleaner dataset**:
-   - Aggressive preprocessing removes noise
-   - Stopword removal improves signal
-   - Filtered classes improve stability
+1. **Robust training**:
+   - 3-fold CV reduces overfitting to single split.
+   - Ensemble improves generalization.
 
-2. **Memory efficiency**:
-   - Gradient checkpointing enables larger models
-   - Smaller batch size with accumulation
+2. **Class imbalance handling**:
+   - Focal loss focuses on hard examples.
+   - Class weights balance rare classes.
 
-3. **Robust training**:
-   - 3-fold CV reduces overfitting
-   - Ensemble improves generalization
-   - Auto-resume from checkpoints
+3. **Regularization**:
+   - Label smoothing prevents overconfidence.
+   - Dropout (0.3) in two layers.
+   - Weight decay (0.01).
 
-4. **Better performance**:
-   - 87.56% accuracy vs 83.70% (Reuters-10)
-   - Fewer classes = better per-class performance
+4. **Reproducibility**:
+   - Fixed seeds (42, 113).
+   - Deterministic data loading.
 
 ### 11.2 Limitations
 
-1. **Reduced coverage**:
-   - Only 18 classes (vs original 46)
-   - 28 rare classes excluded
-   - Not suitable for comprehensive classification
+1. **Rare class performance**:
+   - Classes with < 10 samples still perform poorly.
+   - Focal loss and weights insufficient for extreme imbalance.
 
-2. **Aggressive filtering**:
-   - Loses information from rare topics
-   - May not generalize to new rare classes
+2. **Computational cost**:
+   - 10+ hours training time.
+   - 3× model storage (ensemble).
 
-3. **Still some imbalance**:
-   - Class 3 (3,159 samples) dominates
-   - Smallest classes (50-70 samples) still struggle
+3. **Sequence length**:
+   - 300 tokens may truncate long articles.
+   - Important information could be lost.
 
-4. **Computational cost**:
-   - Gradient checkpointing trades speed for memory
-   - 3 models for ensemble (3× storage)
+4. **Single-label assumption**:
+   - Reuters articles can have multiple topics.
+   - Forced single-label classification.
 
 ---
 
 ## 12. Future Improvements
 
-### 12.1 Dataset Enhancements
+### 12.1 Model Architecture
 
-- **Data augmentation**: Back-translation, paraphrasing for small classes
-- **Hierarchical classification**: Group similar classes
-- **Multi-label approach**: Allow multiple topics per article
+- **Hierarchical attention**: Handle longer documents.
+- **Multi-label classification**: Allow multiple topics per article.
+- **Lightweight variants**: DistilBERT, TinyBERT for faster inference.
 
-### 12.2 Model Architecture
+### 12.2 Training Techniques
 
-- **Hierarchical attention**: Handle longer documents
-- **Lightweight variants**: DistilBERT for faster inference
-- **Domain-specific BERT**: FinBERT for financial news
+- **Data augmentation**: Back-translation, synonym replacement for rare classes.
+- **Oversampling**: SMOTE or class-balanced sampling.
+- **Curriculum learning**: Start with easy examples, progress to hard.
 
-### 12.3 Training Techniques
+### 12.3 Hyperparameter Tuning
 
-- **Curriculum learning**: Start with easy examples
-- **Mixup/CutMix**: Advanced augmentation
-- **Self-training**: Use unlabeled Reuters data
+- **Focal gamma**: Test γ ∈ {0.5, 1.0, 2.0, 3.0}.
+- **Label smoothing**: Test ε ∈ {0.05, 0.1, 0.15}.
+- **Dropout**: Test rates ∈ {0.1, 0.2, 0.3, 0.4}.
 
 ### 12.4 Deployment
 
-- **Model compression**: Quantization (INT8), pruning
-- **Knowledge distillation**: Distill ensemble into single model
-- **ONNX export**: For production inference
-- **Serving optimization**: TensorRT, TorchScript
+- **Model compression**: Quantization (INT8), pruning.
+- **Knowledge distillation**: Distill ensemble into single model.
+- **ONNX export**: For production inference.
 
 ---
 
 ## 13. Conclusion
 
-This implementation demonstrates fine-tuning **BERT-base** on a **filtered Reuters-21578 dataset** (≥50 samples per class) with advanced techniques:
+This implementation demonstrates fine-tuning **BERT-base** on Reuters-21578 with advanced techniques:
 
-- **Ensemble F1**: 0.8773 (87.56% accuracy)
-- **Filtered dataset**: 18 classes (from 46)
-- **Aggressive preprocessing**: Stopword removal, text cleaning
-- **Memory-efficient**: Gradient checkpointing enabled
+- **Ensemble F1**: 0.8497 (83.70% accuracy)
+- **Robust training**: 3-fold CV with early stopping
+- **Class imbalance**: Focal loss + class weights + label smoothing
 
-**Key achievements**:
-- **+3.86% accuracy** improvement over Reuters-10 (46 classes)
-- **+2.76% F1** improvement
-- **Faster training**: 2.3 hours vs 10.3 hours
-- **More stable**: Removed ultra-rare classes
+While performance is lower than the original paper's Small BERT (91.77%), this implementation provides:
+- More robust evaluation through cross-validation
+- Better handling of class imbalance
+- Production-ready ensemble approach
 
-**Trade-offs**:
-- **Reduced coverage**: 18 classes vs 46 classes
-- **Excluded rare topics**: 28 classes removed
-- **Not comprehensive**: Suitable for major topics only
+The main challenge remains **extreme class imbalance** (classes with < 10 samples), which requires data augmentation or multi-task learning approaches.
 
-**Best use case**: Production systems focusing on **major news categories** where rare topics can be handled separately or excluded.
-
-**Key takeaway**: Filtering ultra-rare classes and aggressive text preprocessing significantly improve BERT performance on imbalanced news classification, achieving **87.56% accuracy** on 18 major Reuters categories.
+**Key takeaway**: BERT-base with proper regularization and ensemble methods achieves strong performance on news classification, but rare classes remain a significant challenge.
