@@ -1,4 +1,4 @@
-# Fine-Tuning BERT for Automated News Classification - Original Paper Summary
+# Fine-Tuning BERT for Automated News Classification
 
 This document summarizes the implementation described in the paper *“Fine-Tuning BERT for Automated News Classification”* by Salih et al. The goal is to capture the dataset setup, model architecture, training configuration, and results as stated in the paper.
 
