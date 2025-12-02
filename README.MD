@@ -1,4 +1,4 @@
-# Fine-Tuning BERT for Automated News Classification
+# Efficient News Topic Classification: A BERT Fine-Tuning Framework for Balanced and Imbalanced Corpora
 
 A comprehensive comparison of BERT variants for news topic classification, featuring implementations on AG News and Reuters-21578 datasets with advanced training techniques including focal loss, label smoothing, and 3-fold cross-validation ensemble.
 
