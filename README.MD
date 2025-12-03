@@ -9,9 +9,9 @@ A comprehensive comparison of BERT variants for news topic classification, featu
 | Model | Dataset | Classes | Accuracy | F1-Score | Training Time | Details |
 |-------|---------|---------|----------|----------|---------------|---------|
 | **BERT-Base** | AG News | 4 | **94.22%** | **0.9423** | ~2-3 hrs | [📄 Report](BERT-Base_AG-News/BERT-Base_AG-News.md) |
-| BERT-Base | Reuters (Full) | 46 | 83.70% | 0.8497 | ~10.3 hrs | [📄 Report](BERT-Base_Reuters/BERT-Base_Reuters.md) |
-| BERT-Base | Reuters (Filtered) | 18 | 87.56% | 0.8773 | ~2.3 hrs | [📄 Report](BERT-Base_Reuters-Filtered/BERT-Base_Reuters-Filtered.md) |
-| **Small BERT** | Reuters (Filtered) | 18 | 87.66% | 0.8780 | **~0.48 hrs** | [📄 Report](Small-BERT_Reuters_Fine-tuned/Small-BERT_Reuters_Fine-tuned.md) |
+| BERT-Base | Reuters-21578 (Full) | 46 | 83.70% | 0.8497 | ~10.3 hrs | [📄 Report](BERT-Base_Reuters/BERT-Base_Reuters.md) |
+| BERT-Base | Reuters-21578 (Filtered) | 18 | 87.56% | 0.8773 | ~2.3 hrs | [📄 Report](BERT-Base_Reuters-Filtered/BERT-Base_Reuters-Filtered.md) |
+| **Small BERT** | Reuters-21578 (Filtered) | 18 | 87.66% | 0.8780 | **~0.48 hrs** | [📄 Report](Small-BERT_Reuters_Fine-tuned/Small-BERT_Reuters_Fine-tuned.md) |
 
 ---
 
@@ -102,8 +102,8 @@ Each implementation folder contains:
 | Dataset | Classes | Train Samples | Test Samples | Balance | Avg Length |
 |---------|---------|---------------|--------------|---------|------------|
 | AG News | 4 | 120,000 | 7,600 | Perfect | Short |
-| Reuters (Full) | 46 | 8,982 | 2,246 | Imbalanced | Medium |
-| Reuters (Filtered) | 18 | 8,227 | 2,042 | Imbalanced | Medium |
+| Reuters-21578 (Full) | 46 | 8,982 | 2,246 | Imbalanced | Medium |
+| Reuters-21578 (Filtered) | 18 | 8,227 | 2,042 | Imbalanced | Medium |
 
 ---
 
